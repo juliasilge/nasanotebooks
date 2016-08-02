@@ -1,0 +1,155 @@
+---
+title: "NASA Metadata: tf-idf of Description Texts and Keywords"
+author: "Julia Silge"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    highlight: pygments
+    theme: paper
+    toc: yes
+---
+
+```{r, echo = FALSE, warning = FALSE}
+library(knitr)
+knitr::opts_chunk$set(cache = TRUE, warning = FALSE, message = FALSE, dpi = 180)
+options(width=100, dplyr.width = 150)
+```
+
+There are 32,000+ datasets at NASA, and NASA is interested in understanding the connections between these datasets and also connections to other important datasets at other government organizations outside of NASA. Metadata about the NASA datasets is [available online in JSON format](https://data.nasa.gov/data.json). Let's look at this metadata, specifically in this report the *description* and *keyword* fields. Let's use tf-idf to find important words in the description fields and connect that to the keywords.
+
+## Getting and Wrangling the NASA Metadata
+
+Let's download the metadata for the 32,000+ NASA datasets and set up data frames for the descriptions and keywords.
+
+```{r}
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+metadata <- fromJSON("https://data.nasa.gov/data.json")
+names(metadata$dataset)
+nasadesc <- data_frame(id = metadata$dataset$`_id`$`$oid`, desc = metadata$dataset$description)
+nasadesc
+```
+
+These are having a hard time printing out; let's print out part of a few.
+
+```{r}
+nasadesc %>% select(desc) %>% sample_n(5)
+```
+
+And here are the keywords.
+
+```{r}
+nasakeyword <- data_frame(id = metadata$dataset$`_id`$`$oid`, 
+                          keyword = metadata$dataset$keyword) %>%
+        unnest(keyword)
+nasakeyword
+```
+
+What are the most common keywords?
+
+```{r}
+nasakeyword %>% group_by(keyword) %>% count(sort = TRUE)
+```
+
+Looks like "Project completed" may not be useful keywords to keep around for some purposes, and we may want to change all of these to lower or upper case to get rid of duplicates like "OCEANS" and "Oceans". Let's do that, actually.
+
+```{r}
+nasakeyword <- nasakeyword %>% mutate(keyword = toupper(keyword))
+```
+
+
+## Calculating tf-idf for the Description Texts
+
+What is tf-idf? One way to approach how important a word in a document is can be is its *term frequency* (tf), how frequently a word occurs in a document. Some frequently occurring words are not important, though; in English, these are probably words like “the”, “is”, “of”, and so forth. Another approach is to look at a term’s *inverse document frequency* (idf), which decreases the weight for commonly used words and increases the weight for words that are not used very much in a collection of documents. This can be combined with term frequency to calculate a term’s tf-idf, the frequency of a term adjusted for how rarely it is used. Check out [my blog post on this to learn more](http://juliasilge.com/blog/Term-Frequency-tf-idf/).
+
+```{r}
+library(tidytext)
+descwords <- nasadesc %>% unnest_tokens(word, desc) %>%
+        count(id, word, sort = TRUE) %>%
+        ungroup()
+descwords
+```
+
+These are the most common "words" in NASA description fields, the words with highest term frequency. Most of these are nonsense gibberish from converting symbols like an ampersand to plain text. Let's look at that first dataset, for example:
+
+```{r}
+nasadesc %>% filter(id == "55942a88c63a7fe59b498280") %>% select(desc)
+```
+
+There were apparently lots of weird characters in that one. The tf-idf algorithm should decrease the weight for all of these because they are common, but we can remove them via stop words if necessary. So now let's calculate tf-idf for all the words in the description fields.
+
+```{r}
+descwords <- descwords %>% bind_tf_idf(word, id, n)
+descwords
+```
+
+The columns that have been added are tf, idf, and those two quantities multiplied together, tf-idf, which is the thing we are interested in. What are the highest tf-idf words in the NASA description fields?
+
+```{r}
+descwords %>% arrange(-tf_idf)
+```
+
+So these are the most "important" words in the description fields as measured by tf-idf, meaning they are common but not too common. Notice we have run into an issue here; both $n$ and $tf$ are equal to 1 for these terms, meaning that these were description fields that only had a single "word" in them. Let's look at that top one:
+
+```{r}
+nasadesc %>% filter(id == "55942a7cc63a7fe59b49774a") %>% select(desc)
+```
+
+The tf-idf algorithm will think that is a really important word. It might be a good idea to throw out all description fields that have fewer than 5 words or similar.
+
+## Connecting Keywords and Descriptions
+
+So now we know which words in the descriptions have high tf-idf, and we also have labels for these descriptions in the keywords. Let's do a full join of the keyword data frame and the data frame of description words with tf-idf, and then find the highest tf-idf words for a given keyword. (This full join takes a bit to run.)
+
+```{r}
+descwords <- full_join(descwords, nasakeyword, by = "id")
+descwords
+```
+
+## Visualizing Results
+
+Let's look at some of the most important words for a few example keywords.
+
+```{r}
+plot_words <- descwords %>% filter(!near(tf, 1)) %>%
+        filter(keyword %in% c("SOLAR ACTIVITY", "CLOUDS", 
+                              "VEGETATION", "ASTROPHYSICS",
+                              "HUMAN HEALTH", "BUDGET")) %>%
+        arrange(desc(tf_idf)) %>%
+        group_by(keyword) %>%
+        distinct(word, keyword, .keep_all = TRUE) %>%
+        top_n(20, tf_idf) %>% ungroup() %>%
+        mutate(word = factor(word, levels = rev(unique(word))))
+plot_words
+```
+
+Notice that many of these have $n=1$; these are words have that appeared only one time in their given description fields. A lot of them have really high term frequency too (i.e., very short descriptions).
+
+```{r}
+nasadesc %>% filter(id == "55942a60c63a7fe59b49612f") %>% select(desc)
+```
+
+A tf-idf algorithm isn't going to work very well on descriptions that are only 2 words long, or at least it is going to very heavily weight those words. Maybe that isn't inappropriate, actually.
+
+Anyway, let's plot these high tf-idf words for these example keywords.
+
+```{r, fig.height=8, fig.width=10}
+library(ggplot2)
+library(ggstance)
+library(ggthemes)
+ggplot(plot_words, aes(tf_idf, word, fill = keyword, alpha = tf_idf)) +
+        geom_barh(stat = "identity", show.legend = FALSE) +
+        labs(title = "Highest tf-idf words in NASA Metadata Description Fields",
+             subtitle = "Distribution of tf-idf for words from datasets labeled with various keywords",
+             caption = "NASA Metadata from https://data.nasa.gov/data.json",
+             y = NULL, x = "tf-idf") +
+        facet_wrap(~keyword, ncol = 3, scales = "free") +
+        theme_tufte(base_family = "Arial", base_size = 13, ticks = FALSE) +
+        scale_alpha_continuous(range = c(0.2, 1)) +
+        scale_x_continuous(expand=c(0,0)) +
+        theme(strip.text=element_text(hjust=0)) +
+        theme(plot.caption=element_text(size=9))
+```
+
+This could use a bit more cleaning still; there are still some short "words" that are remnants of the conversion from symbols ("li" for sure, maybe others). Some of these other combinations of letters are certainly acronyms (important?), and the examples of numbers may be important for these topics. I see an example of what I think is a mispelled word that the algorithm decided was important: "univsity"? Overall, tf-idf has identified important words for these topics.
