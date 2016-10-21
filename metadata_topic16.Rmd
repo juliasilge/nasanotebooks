@@ -1,0 +1,199 @@
+---
+title: "NASA Metadata: 16 Topics for Topic Modeling?"
+author: "Julia Silge"
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    highlight: pygments
+    theme: paper
+    toc: yes
+---
+
+```{r, echo = FALSE, warning = FALSE}
+library(knitr)
+knitr::opts_chunk$set(cache = TRUE, warning = FALSE, message = FALSE, dpi = 180)
+options(width=100, dplyr.width = 150)
+```
+
+There are 32,000+ datasets at NASA, and NASA is interested in understanding the connections between these datasets. Metadata about the NASA datasets is [available online in JSON format](https://data.nasa.gov/data.json). Let's look at this metadata, specifically in this report the *description* and *keyword* fields. I started to use [topic modeling to classify the description fields](http://rpubs.com/juliasilge/201707) and connect that to the keywords; in this report, let's explore how many topics makes the most sense.
+
+## What is Topic Modeling?
+
+To review, topic modeling is a method for unsupervised classification of documents; this method models each document as a mixture of topics and each topic as a mixture of words. The kind of method I'll be using here for topic modeling is called [latent Dirichlet allocation (LDA)](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation) but there are other possibilities for fitting a topic model. In the context here, each data set description is a document; we are going to see if we can fit model these description texts as a mixture of topics.
+
+## Getting and Wrangling the NASA Metadata
+
+Let's download the metadata for the 32,000+ NASA datasets and set up data frames for the descriptions and keywords, similarly to [how I've done this in the past](http://rpubs.com/juliasilge/200028).
+
+```{r}
+library(jsonlite)
+library(dplyr)
+library(tidyr)
+metadata <- fromJSON("https://data.nasa.gov/data.json")
+names(metadata$dataset)
+nasadesc <- data_frame(id = metadata$dataset$`_id`$`$oid`, desc = metadata$dataset$description)
+nasakeyword <- data_frame(id = metadata$dataset$`_id`$`$oid`, 
+                          keyword = metadata$dataset$keyword) %>%
+    unnest(keyword)
+nasakeyword <- nasakeyword %>% mutate(keyword = toupper(keyword))
+```
+
+Just to check on things, what are the most common keywords?
+
+```{r}
+nasakeyword %>% group_by(keyword) %>% count(sort = TRUE)
+```
+
+## Making a DocumentTermMatrix
+
+To do the topic modeling, we need to make a `DocumentTermMatrix`, a special kind of matrix from the tm package (of course, there is just a general concept of a "document-term matrix"). Rows correspond to documents (description texts in our case) and columns correspond to terms (i.e., words); it is a sparse matrix and the values are word counts (although they also can be tf-idf).
+
+Let's clean up the text a bit using stop words to remove some of the nonsense "words" leftover from HTML or other character encoding.
+
+```{r}
+library(tidytext)
+mystop_words <- bind_rows(stop_words, 
+                          data_frame(word = c("nbsp", "amp", "gt", "lt",
+                                              "timesnewromanpsmt", "font",
+                                              "td", "li", "br", "tr", "quot",
+                                              "st", "img", "src", "strong",
+                                              as.character(1:10)), 
+                                     lexicon = rep("custom", 25)))
+word_counts <- nasadesc %>% unnest_tokens(word, desc) %>%
+    anti_join(mystop_words) %>%
+    count(id, word, sort = TRUE) %>%
+    ungroup()
+word_counts
+```
+
+Now let's make the `DocumentTermMatrix`.
+
+```{r}
+desc_dtm <- word_counts %>%
+  cast_dtm(id, word, n)
+desc_dtm
+```
+
+## LDA Topic Modeling
+
+Now let's use the [topicmodels](https://cran.r-project.org/package=topicmodels) package to create an LDA model. How many topics will we tell the algorithm to make? This is a question much like in $k$-means clustering; we don't really know ahead of time. In my last exploration, I tried [8 topics](http://rpubs.com/juliasilge/201707); this time around, we're going to try 16.
+
+```{r}
+library(topicmodels)
+desc_lda <- LDA(desc_dtm, k = 16, control = list(seed = 1234))
+desc_lda
+```
+
+We have done it! We have modeled topics! This is a stochastic algorithm that could have different results depending on where the algorithm starts, so I need to put a `seed` for reproducibility. We'll need to see how robust the topic modeling is eventually.
+
+## Exploring the Modeling
+
+Let's use the amazing/wonderful [broom](https://github.com/dgrtwo/broom) package to tidy the models, and see what we can find out.
+
+```{r}
+library(broom)
+tidy_lda <- tidy(desc_lda)
+tidy_lda
+```
+
+The column $\beta$ tells us the probability of that term being generated from that topic for that document. Notice that some of very, very low, and some are not so low.
+
+What are the top 5 terms for each topic?
+
+```{r}
+top_terms <- tidy_lda %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta)
+
+top_terms
+```
+
+Let's look at this visually.
+
+```{r, fig.width=10, fig.height=10}
+library(ggplot2)
+library(ggthemes)
+ggplot(top_terms, aes(term, beta, fill = as.factor(topic))) +
+    geom_bar(stat = "identity", show.legend = FALSE, alpha = 0.8) +
+    coord_flip() +
+    labs(title = "Top 10 Terms in Each LDA Topic",
+         subtitle = "Topic modeling of NASA metadata description field texts",
+         caption = "NASA metadata from https://data.nasa.gov/data.json",
+         x = NULL, y = "beta") +
+    facet_wrap(~topic, ncol = 4, scales = "free") +
+    theme_tufte(base_family = "Arial", ticks = FALSE) +
+    scale_y_continuous(expand=c(0,0)) +
+    theme(strip.text=element_text(hjust=0)) +
+    theme(plot.caption=element_text(size=9))
+```
+
+We can see what a dominant word "data" is in these description texts. There do appear to be meaningful differences between these collections of terms, though, from terms about soil and land to terms about design, systems, and technology. 
+
+## Which Topic Does Each Document Belong To?
+
+Let's find out which topics are associated with which description fields (i.e., documents).
+
+```{r}
+lda_gamma <- tidy(desc_lda, matrix = "gamma")
+lda_gamma
+```
+
+The column $\gamma$ here is the probability that each document belongs in each topic. Notice that some are very low and some are higher. How are the probabilities distributed?
+
+```{r, fig.width=10, fig.height=9}
+ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
+    geom_histogram(show.legend = FALSE, alpha = 0.8) +
+    facet_wrap(~topic, ncol = 4) +
+    labs(title = "Distribution of Probability for Each Topic",
+         subtitle = "Topic modeling of NASA metadata description field texts",
+         caption = "NASA metadata from https://data.nasa.gov/data.json",
+         y = NULL, x = "gamma") +
+    scale_y_log10() +
+    theme_minimal(base_family = "Arial", base_size = 13) +
+    theme(strip.text=element_text(hjust=0)) +
+    theme(plot.caption=element_text(size=9))
+
+```
+
+The y-axis is plotted here on a log scale so we can see something. Documents are getting sorted into topics much less cleanly now than with 8 topics, with the exception of, say, topics 2 and 4. Still, for any individual document, we could find the topic that it has the highest probability of belonging to.
+
+## Connecting Topic Modeling to Keywords
+
+Let's connect these topic models with the keywords and see what happens. Let's `join` this dataframe to the keywords and see which keywords are associated with which topic.
+
+```{r}
+lda_gamma <- full_join(lda_gamma, nasakeyword, by = c("document" = "id"))
+lda_gamma
+```
+
+Let's keep each document that was modeled as belonging to a topic with a probability $> 0.9$, and then find the top keywords for each topic.
+
+```{r}
+top_keywords <- lda_gamma %>% filter(gamma > 0.9) %>% 
+    group_by(topic, keyword) %>% 
+    count(keyword, sort = TRUE)
+top_keywords
+```
+
+Let's do a visualization for these as well.
+
+```{r, fig.width=10, fig.height=16}
+top_keywords <- top_keywords %>%
+    top_n(10, n)
+ggplot(top_keywords, aes(keyword, n, fill = as.factor(topic))) +
+    geom_bar(stat = "identity", show.legend = FALSE, alpha = 0.8) +
+    labs(title = "Top 10 Keywords for Each LDA Topic",
+         subtitle = "Topic modeling of NASA metadata description field texts",
+         caption = "NASA metadata from https://data.nasa.gov/data.json",
+         x = NULL, y = "Number of documents") +
+    coord_flip() +
+    facet_wrap(~topic, ncol = 2, scales = "free") +
+    theme_tufte(base_family = "Arial", ticks = FALSE) +
+    scale_y_continuous(expand=c(0,0)) +
+    theme(strip.text=element_text(hjust=0)) +
+    theme(plot.caption=element_text(size=9))
+```
+
+Nice! Topic modeling with 16 topics looks pretty meaningful still, although the issue of categorizing documents into topics is starting to get iffy. It's interesting that the keywords for topics 2, 3, and 4 are such duplicates, because the top terms in those topics do show meaningful differences.
