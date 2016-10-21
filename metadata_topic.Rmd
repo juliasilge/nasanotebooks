@@ -142,10 +142,11 @@ lda_gamma
 
 The column $\gamma$ here is the probability that each document belongs in each topic. Notice that some are very low and some are higher. How are the probabilities distributed?
 
-```{r, fig.width=10, fig.height=9}
+```{r, fig.width=10, fig.height=6}
 ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
-        geom_histogram(show.legend = FALSE) +
+        geom_histogram(alpha = 0.8, show.legend = FALSE) +
         facet_wrap(~topic, ncol = 4) +
+        scale_y_log10() +
         labs(title = "Distribution of Probability for Each Topic",
              subtitle = "Topic modeling of NASA metadata description field texts",
              caption = "NASA metadata from https://data.nasa.gov/data.json",
@@ -156,7 +157,7 @@ ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
 
 ```
 
-Most documents are getting sorted into one of these topics with decent probability; lots of documents are getting sorted into topics 2, and documents are being sorted into topics 1 and 5 (6?) less cleanly. Some topics have fewer documents. For any individual document, we could find the topic that it has the highest probability of belonging to.
+The y-axis is plotted here on a log scale so we can see something. Most documents are getting sorted into one of these topics with decent probability; lots of documents are getting sorted into topics 2, and documents are being sorted into topics 1 and 5 (6?) less cleanly. Some topics have fewer documents. For any individual document, we could find the topic that it has the highest probability of belonging to.
 
 ## Connecting Topic Modeling to Keywords
 

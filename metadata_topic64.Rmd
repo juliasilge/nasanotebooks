@@ -1,5 +1,5 @@
 ---
-title: "NASA Metadata: 16 Topics for Topic Modeling?"
+title: "NASA Metadata: 64 Topics for Topic Modeling?"
 author: "Julia Silge"
 date: '`r Sys.Date()`'
 output:
@@ -76,11 +76,11 @@ desc_dtm
 
 ## LDA Topic Modeling
 
-Now let's use the [topicmodels](https://cran.r-project.org/package=topicmodels) package to create an LDA model. How many topics will we tell the algorithm to make? This is a question much like in $k$-means clustering; we don't really know ahead of time. In my last exploration, I tried [8 topics](http://rpubs.com/juliasilge/201707); this time around, we're going to try 16.
+Now let's use the [topicmodels](https://cran.r-project.org/package=topicmodels) package to create an LDA model. How many topics will we tell the algorithm to make? This is a question much like in $k$-means clustering; we don't really know ahead of time. In previous explorations, I tried [8 topics](http://rpubs.com/juliasilge/201707), [16 topics](http://rpubs.com/juliasilge/220623), and [32 topics](http://rpubs.com/juliasilge/220633); this time around, we're going to try 64.
 
 ```{r}
 library(topicmodels)
-desc_lda <- LDA(desc_dtm, k = 16, control = list(seed = 1234))
+desc_lda <- LDA(desc_dtm, k = 64, control = list(seed = 1234))
 desc_lda
 ```
 
@@ -112,7 +112,7 @@ top_terms
 
 Let's look at this visually.
 
-```{r, fig.width=10, fig.height=10}
+```{r, fig.width=10, fig.height=20}
 library(ggplot2)
 library(ggthemes)
 ggplot(top_terms, aes(term, beta, fill = as.factor(topic))) +
@@ -129,7 +129,7 @@ ggplot(top_terms, aes(term, beta, fill = as.factor(topic))) +
     theme(plot.caption=element_text(size=9))
 ```
 
-We can see what a dominant word "data" is in these description texts. There do appear to be meaningful differences between these collections of terms, though, from terms about soil and land to terms about design, systems, and technology. 
+We see some similar patterns as before, and continue to see meaningful differences between these collections of terms.
 
 ## Which Topic Does Each Document Belong To?
 
@@ -142,7 +142,7 @@ lda_gamma
 
 The column $\gamma$ here is the probability that each document belongs in each topic. Notice that some are very low and some are higher. How are the probabilities distributed?
 
-```{r, fig.width=10, fig.height=9}
+```{r, fig.width=10, fig.height=20}
 ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
     geom_histogram(show.legend = FALSE, alpha = 0.8) +
     facet_wrap(~topic, ncol = 4) +
@@ -151,49 +151,11 @@ ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
          caption = "NASA metadata from https://data.nasa.gov/data.json",
          y = NULL, x = "gamma") +
     scale_y_log10() +
-    theme_minimal(base_family = "Arial", base_size = 13) +
+    theme_minimal(base_family = "Arial") +
     theme(strip.text=element_text(hjust=0)) +
     theme(plot.caption=element_text(size=9))
 
 ```
 
-The y-axis is plotted here on a log scale so we can see something. Documents are getting sorted into topics a little less cleanly now than with 8 topics, with the exception of, say, topics 2 and 4. Still, this doesn't look intensely worrisome.
+The y-axis is plotted here on a log scale so we can see something. Documents are not getting sorted into topics very cleanly now, compared with [8 topics](http://rpubs.com/juliasilge/201707) and [16 topics](http://rpubs.com/juliasilge/220623); several of these distributions are starting to be flat toward the $\gamma = 1$ end. Still, for any individual document, we could find the topic that it has the highest probability of belonging to.
 
-## Connecting Topic Modeling to Keywords
-
-Let's connect these topic models with the keywords and see what happens. Let's `join` this dataframe to the keywords and see which keywords are associated with which topic.
-
-```{r}
-lda_gamma <- full_join(lda_gamma, nasakeyword, by = c("document" = "id"))
-lda_gamma
-```
-
-Let's keep each document that was modeled as belonging to a topic with a probability $> 0.9$, and then find the top keywords for each topic.
-
-```{r}
-top_keywords <- lda_gamma %>% filter(gamma > 0.9) %>% 
-    group_by(topic, keyword) %>% 
-    count(keyword, sort = TRUE)
-top_keywords
-```
-
-Let's do a visualization for these as well.
-
-```{r, fig.width=10, fig.height=16}
-top_keywords <- top_keywords %>%
-    top_n(10, n)
-ggplot(top_keywords, aes(keyword, n, fill = as.factor(topic))) +
-    geom_bar(stat = "identity", show.legend = FALSE, alpha = 0.8) +
-    labs(title = "Top 10 Keywords for Each LDA Topic",
-         subtitle = "Topic modeling of NASA metadata description field texts",
-         caption = "NASA metadata from https://data.nasa.gov/data.json",
-         x = NULL, y = "Number of documents") +
-    coord_flip() +
-    facet_wrap(~topic, ncol = 2, scales = "free") +
-    theme_tufte(base_family = "Arial", ticks = FALSE) +
-    scale_y_continuous(expand=c(0,0)) +
-    theme(strip.text=element_text(hjust=0)) +
-    theme(plot.caption=element_text(size=9))
-```
-
-Nice! Topic modeling with 16 topics looks pretty meaningful still, although the issue of categorizing documents into topics is starting to get iffy. It's interesting that the keywords for topics 2, 3, and 4 are such duplicates, because the top terms in those topics do show meaningful differences.
