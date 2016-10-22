@@ -112,7 +112,7 @@ top_terms
 
 Let's look at this visually.
 
-```{r, fig.width=10, fig.height=20}
+```{r, fig.width=10, fig.height=30}
 library(ggplot2)
 library(ggthemes)
 ggplot(top_terms, aes(term, beta, fill = as.factor(topic))) +
@@ -157,5 +157,5 @@ ggplot(lda_gamma, aes(gamma, fill = as.factor(topic))) +
 
 ```
 
-The y-axis is plotted here on a log scale so we can see something. Documents are not getting sorted into topics very cleanly now, compared with [8 topics](http://rpubs.com/juliasilge/201707) and [16 topics](http://rpubs.com/juliasilge/220623); several of these distributions are starting to be flat toward the $\gamma = 1$ end. Still, for any individual document, we could find the topic that it has the highest probability of belonging to.
+The y-axis is plotted here on a log scale so we can see something. These are looking pretty bad now, in my opinion; many of them are flat or even sloping *down* as you move from $\gamma = 0$ to $\gamma = 1$. We have definitely gotten into a range here where documents are not being sorted into topics with reliable probability. So, 64 topics are definitely too many!
 
